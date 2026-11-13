@@ -10,7 +10,7 @@ import { IMAGE_QUEUE, ImageQueue } from './images.queue';
 import { ImagePipelineService } from './processing/image-pipeline.service';
 import { ImageProcessor } from './processing/image.processor';
 import { PendingReconciler } from './processing/pending-reconciler';
-import { FACE_DETECTOR, RekognitionFaceDetector, StubFaceDetector } from './processing/face-detector';
+import { FACE_DETECTOR, RekognitionFaceDetector } from './processing/face-detector';
 
 // The queue consumer only runs in the worker role (or "all" for local dev).
 const runsWorker = (process.env.PROCESS_ROLE ?? 'all') !== 'api';
@@ -19,12 +19,7 @@ const workerProviders: Provider[] = runsWorker
       ImageProcessor,
       PendingReconciler,
       ImagePipelineService,
-      {
-        provide: FACE_DETECTOR,
-        inject: [ENV],
-        useFactory: (env: Env) =>
-          env.FACE_DETECTOR === 'stub' ? new StubFaceDetector() : new RekognitionFaceDetector(env),
-      },
+      { provide: FACE_DETECTOR, useClass: RekognitionFaceDetector },
     ]
   : [];
 

@@ -18,7 +18,7 @@ async function main() {
   };
 
   const scene = await sceneJpeg(1600, 1600, 1);
-  write('sharp-scene.jpg', scene); // accepted with FACE_DETECTOR=stub
+  write('sharp-scene.jpg', scene); // passes format/size/blur checks; Rekognition then rejects it (no face)
   write('sharp-scene-resized-copy.png', await sharp(scene).resize(1000).png().toBuffer()); // DUPLICATE
   write('sharp-scene-recompressed.jpg', await sharp(scene).jpeg({ quality: 60 }).toBuffer()); // DUPLICATE
   write('different-scene.jpg', await sceneJpeg(1600, 1600, 7)); // accepted (not similar)

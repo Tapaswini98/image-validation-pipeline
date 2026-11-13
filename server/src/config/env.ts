@@ -14,18 +14,14 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().default('redis://localhost:6380'),
 
-  // Storage (S3 or any S3-compatible service such as MinIO / R2)
+  // Storage: a private AWS S3 bucket. Credentials come from the default AWS chain
+  // (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, a profile, or an instance role).
   S3_BUCKET: z.string().min(1),
-  S3_REGION: z.string().default('us-east-1'),
-  S3_ENDPOINT: z.string().url().optional(), // set for S3-compatible servers; omit for real S3
-  S3_PUBLIC_ENDPOINT: z.string().url().optional(), // browser-reachable endpoint for presigned URLs, if different
-  S3_ACCESS_KEY_ID: z.string().optional(), // falls back to the default AWS credential chain
-  S3_SECRET_ACCESS_KEY: z.string().optional(),
+  S3_REGION: z.string().min(1),
   PRESIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
 
-  // Face detection: "rekognition" (AWS) or "stub" (dev only, every image has one face)
-  FACE_DETECTOR: z.enum(['rekognition', 'stub']).default('rekognition'),
-  REKOGNITION_REGION: z.string().default('us-east-1'),
+  // Face detection: AWS Rekognition (same credentials as S3). Defaults to S3_REGION.
+  REKOGNITION_REGION: z.string().min(1).optional(),
 
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
@@ -50,16 +46,18 @@ const EnvSchema = z.object({
   MIN_FACE_SIZE_PX: z.coerce.number().int().positive().default(100),
 });
 
-export type Env = z.infer<typeof EnvSchema>;
+const ResolvedEnvSchema = EnvSchema.transform((e) => ({
+  ...e,
+  REKOGNITION_REGION: e.REKOGNITION_REGION ?? e.S3_REGION,
+}));
+
+export type Env = z.infer<typeof ResolvedEnvSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  // Treat `KEY=` (empty) as unset, so .env / docker-compose can switch optional settings off,
-  // e.g. S3_ENDPOINT= to use real AWS S3 instead of the local S3-compatible server.
+  // Treat `KEY=` (empty) as unset, so a blank line in .env falls back to the default
+  // (or fails validation for required keys) instead of becoming an empty string.
   source = Object.fromEntries(Object.entries(source).filter(([, v]) => v !== ''));
-  const parsed = EnvSchema.refine((e) => !(e.NODE_ENV === 'production' && e.FACE_DETECTOR === 'stub'), {
-    message: 'FACE_DETECTOR=stub is not allowed in production',
-    path: ['FACE_DETECTOR'],
-  }).safeParse(source);
+  const parsed = ResolvedEnvSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);

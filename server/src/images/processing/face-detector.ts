@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { DetectFacesCommand, RekognitionClient } from '@aws-sdk/client-rekognition';
 import { ENV, type Env } from '../../config/env';
 import type { DetectedFace } from '../validation/face-rules';
@@ -8,20 +8,6 @@ export interface FaceDetector {
   detect(jpeg: Buffer): Promise<DetectedFace[]>;
 }
 export const FACE_DETECTOR = Symbol('FACE_DETECTOR');
-
-/**
- * DEV ONLY (FACE_DETECTOR=stub): pretends every image has one centred face, so the rest of the
- * pipeline can be run without AWS credentials. Refused in production by the env schema.
- */
-@Injectable()
-export class StubFaceDetector implements FaceDetector {
-  private readonly logger = new Logger(StubFaceDetector.name);
-
-  detect(): Promise<DetectedFace[]> {
-    this.logger.warn('FACE_DETECTOR=stub: face checks are NOT real');
-    return Promise.resolve([{ confidence: 99, box: { left: 0.3, top: 0.2, width: 0.4, height: 0.5 } }]);
-  }
-}
 
 /**
  * AWS Rekognition DetectFaces. Chosen over a local model (face-api.js / ONNX) because it is

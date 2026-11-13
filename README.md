@@ -23,38 +23,62 @@ Users upload photos of themselves. Each photo is stored, validated in a backgrou
 
 ## Quick start
 
-### Everything in Docker (one command)
+Requires Node 20.12+, Docker, and an AWS account. Storage is a **private AWS S3 bucket** and face detection is **AWS Rekognition**. There is no local S3 emulator or fake face detector.
+
+### 1. AWS
+
+Create a private S3 bucket and an IAM user with:
+
+- `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::your-bucket-name/*`
+- `s3:ListBucket` on `arn:aws:s3:::your-bucket-name` (the health check uses it)
+- `rekognition:DetectFaces`
+
+Put the values in a root `.env` (gitignored; Docker Compose reads it):
+
+```
+S3_BUCKET=your-bucket-name
+S3_REGION=your-bucket-region
+REKOGNITION_REGION=your-region        # optional, defaults to S3_REGION
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+### 2. Database migration (first run only)
+
+The repo ships the Prisma schema but no migration files, so create the first migration:
+
+```bash
+docker compose up -d postgres redis
+cd server && npm install
+npx prisma migrate dev --name init --create-only
+```
+
+Prisma can't express partial indexes, so append this to the generated `prisma/migrations/<timestamp>_init/migration.sql` before applying it:
+
+```sql
+-- At most one ACCEPTED image per exact file content within a collection, enforced by the DB.
+CREATE UNIQUE INDEX "images_collection_content_hash_accepted_key"
+  ON "images" ("collection_id", "content_hash")
+  WHERE "status" = 'ACCEPTED';
+```
+
+Then apply it with `npx prisma migrate dev`, and commit the `prisma/migrations` folder.
+
+### 3a. Everything in Docker
 
 ```bash
 docker compose up --build                  # UI http://localhost:3000 · API http://localhost:3001
 ```
 
-This starts Postgres, Redis, an S3-compatible store, a one-shot `migrate` job, the **API**, a separate **worker**, and the **client**. Face detection defaults to the dev stub. For real Rekognition, create a root `.env` (gitignored) containing `FACE_DETECTOR=rekognition`, `AWS_ACCESS_KEY_ID=…`, `AWS_SECRET_ACCESS_KEY=…`.
+This starts Postgres, Redis, a one-shot `migrate` job, the **API**, a separate **worker**, and the **client**. Scale the workers with `docker compose up --build --scale worker=3`. `docker compose down -v` wipes Postgres and Redis; S3 objects stay in the bucket.
 
-Scale the workers with `docker compose up --build --scale worker=3`, and reset all data with `docker compose down -v`.
-
-**Real AWS S3 instead of the local store:** create a private bucket, then add these lines to the root `.env`. Leaving the endpoint and key lines empty makes the app use real S3 with the AWS keys above:
-
-```
-S3_BUCKET=your-bucket-name
-S3_REGION=your-bucket-region
-S3_ENDPOINT=
-S3_PUBLIC_ENDPOINT=
-S3_ACCESS_KEY_ID=
-S3_SECRET_ACCESS_KEY=
-```
-
-The IAM user needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::your-bucket-name/*`, plus `s3:ListBucket` on the bucket itself (the health check uses it).
-
-### Local development (hot reload)
-
-Requires Node 20.12+ and Docker.
+### 3b. Local development (hot reload)
 
 ```bash
-docker compose up -d postgres redis s3     # infrastructure only: Postgres :5433, Redis :6380, S3 :9090
+docker compose up -d postgres redis        # infrastructure only: Postgres :5433, Redis :6380
 
 cd server
-cp .env.example .env                       # add AWS keys for Rekognition, or set FACE_DETECTOR=stub
+cp .env.example .env                       # fill in the AWS section
 npm install
 npm run db:migrate
 npm run start:dev                          # API + worker on :3001
@@ -63,8 +87,6 @@ cd ../client
 npm install
 npm run dev                                # UI on http://localhost:3000
 ```
-
-`FACE_DETECTOR=stub` runs the whole pipeline without an AWS account (every image is treated as having one face). It is refused when `NODE_ENV=production`.
 
 In production the API and worker run as separate processes from the same build:
 
@@ -149,7 +171,7 @@ All thresholds are environment variables (`BLUR_THRESHOLD`, `SIMILARITY_MAX_HAMM
 | **Laplacian variance, regional max** | Standard focus measure. The regional max avoids rejecting portraits with a blurred background (bokeh). | A heuristic: the threshold must be calibrated on labelled photos. The best signal is sharpness *inside the face box*. |
 | **Rekognition** for faces | Accurate, no model hosting, small worker image | About $1 per 1,000 images, network latency, photos leave our infrastructure. A self-hosted ONNX detector (YuNet/RetinaFace) fits behind the same `FaceDetector` interface. |
 | **Detector errors fail the job** (and are retried), not "no face" | An outage must not become a wrong rejection, or a silent pass | The user sees `FAILED` + Retry after 3 attempts |
-| **PostgreSQL + Prisma** | Relational integrity, enums, partial indexes, transactions and advisory locks were all needed above | Prisma can't express partial indexes, so they are hand-added in the migration SQL |
+| **PostgreSQL + Prisma** | Relational integrity, enums, partial indexes, transactions and advisory locks were all needed above | Prisma can't express partial indexes, so the partial unique index is hand-added to the migration SQL (see Quick start) |
 | **Keyset (cursor) pagination** | Constant cost at any page depth; stable while new uploads arrive | No "jump to page N" |
 | **Private bucket + presigned URLs (15 min)** | Images are never publicly listable; access can be revoked | URLs expire, so the client re-fetches them |
 
@@ -225,7 +247,7 @@ Not done (no auth in scope): `collectionId` is a client-held UUID standing in fo
 
 ```bash
 cd server && npm test            # 43 unit tests
-cd server && npm run test:int    # 4 integration tests against real Postgres (docker compose up first)
+cd server && npm run test:int    # 4 integration tests against real Postgres (Postgres up and migrated first)
 cd client && npm test            # 12 reducer + grouping tests
 cd server && npm run fixtures    # generates QA files (blurry, low-res, duplicate copies, corrupt, EXIF-rotated, …)
 ```
@@ -269,4 +291,4 @@ cd server && npm run fixtures    # generates QA files (blurry, low-res, duplicat
 5. **Push updates over SSE/WebSocket** instead of polling.
 6. **Observability:** structured JSON logs (pino) with an image ID per log line, queue-depth and per-rejection-code metrics, and a Bull Board dashboard.
 7. **S3 lifecycle rules** to expire rejected originals, plus a sweep for orphaned objects.
-8. **Dockerfiles** for the API and worker, with CI running lint, unit and integration tests.
+8. **CI** running lint, unit and integration tests on every push.

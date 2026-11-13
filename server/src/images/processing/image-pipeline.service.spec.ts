@@ -10,7 +10,11 @@ import { blurred, sceneJpeg } from '../../test-utils/images';
  * Pipeline tests: REAL decoding/blur/hash on generated images; only the boundaries
  * (DB, S3, Rekognition) are faked, so the tests exercise the actual validation logic.
  */
-const env = loadEnv({ DATABASE_URL: 'postgresql://x@localhost/x', S3_BUCKET: 'test' });
+const env = loadEnv({
+  DATABASE_URL: 'postgresql://x@localhost/x',
+  S3_BUCKET: 'test',
+  S3_REGION: 'us-east-1',
+});
 const oneFace: DetectedFace[] = [{ confidence: 99.9, box: { left: 0.3, top: 0.2, width: 0.4, height: 0.4 } }];
 
 function setup(opts: {
