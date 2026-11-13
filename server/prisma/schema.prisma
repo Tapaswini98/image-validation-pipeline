@@ -59,7 +59,7 @@ model Image {
   blurScore         Float?         @map("blur_score")
   faceCount         Int?           @map("face_count")
   faceAreaRatio     Float?         @map("face_area_ratio")
-  /// SHA-256 of the decoded pixels -> exact duplicate detection
+  /// SHA-256 of the uploaded file bytes -> exact duplicate detection (re-encodes are caught by perceptualHash)
   contentHash       String?        @map("content_hash") @db.Char(64)
   /// 64-bit difference hash -> near-duplicate detection via Hamming distance
   perceptualHash    BigInt?        @map("perceptual_hash")
