@@ -2,7 +2,8 @@
  * Generates QA files for the rejection paths that are awkward to find as real photos.
  *   npm run fixtures            -> writes to ./fixtures
  *
- * Real-photo cases (faces, group shots, HEIC from an iPhone) still need real photos.
+ * Generated scenes contain no face, so anything that passes the earlier checks ends as NO_FACE.
+ * Real-photo cases (accepted, duplicates, small/multiple faces, HEIC) need real photos.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,9 +20,9 @@ async function main() {
 
   const scene = await sceneJpeg(1600, 1600, 1);
   write('sharp-scene.jpg', scene); // passes format/size/blur checks; Rekognition then rejects it (no face)
-  write('sharp-scene-resized-copy.png', await sharp(scene).resize(1000).png().toBuffer()); // DUPLICATE
-  write('sharp-scene-recompressed.jpg', await sharp(scene).jpeg({ quality: 60 }).toBuffer()); // DUPLICATE
-  write('different-scene.jpg', await sceneJpeg(1600, 1600, 7)); // accepted (not similar)
+  write('sharp-scene-resized-copy.png', await sharp(scene).resize(1000).png().toBuffer()); // NO_FACE (dHash 0 from sharp-scene)
+  write('sharp-scene-recompressed.jpg', await sharp(scene).jpeg({ quality: 60 }).toBuffer()); // NO_FACE (near-identical dHash)
+  write('different-scene.jpg', await sceneJpeg(1600, 1600, 7)); // NO_FACE
   write('blurry.jpg', await blurred(await sceneJpeg(1600, 1600, 3))); // BLURRY
   write(
     'low-resolution-400.jpg',
