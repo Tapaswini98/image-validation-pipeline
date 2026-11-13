@@ -110,7 +110,7 @@ flowchart LR
   subgraph Worker["Worker (BullMQ consumer)"]
     P[Pipeline:<br/>decode · resolution · blur ·<br/>duplicate · faces]
   end
-  UI -- "1 file per request<br/>(3 in parallel, progress bars)" --> C
+  UI -- "1 file per request<br/>(4 in parallel, progress bars)" --> C
   C -- original --> S3[(S3<br/>private bucket)]
   C -- "row: PENDING" --> PG[(PostgreSQL)]
   C -- "job (jobId = imageId)" --> R[(Redis)]
@@ -162,7 +162,7 @@ All thresholds are environment variables (`BLUR_THRESHOLD`, `SIMILARITY_MAX_HAMM
 | Decision | Why | Tradeoff / alternative |
 |---|---|---|
 | **Async worker (BullMQ)** instead of processing in the request | HEIC decode and face detection take about 1–3 s per image and are CPU-bound; the queue gives retries with exponential backoff, back-pressure, and separate scaling | More moving parts (Redis). A Postgres-backed queue (pg-boss) would avoid Redis at lower throughput. |
-| **One file per request**, 3 in parallel (client) | Per-file progress bars and retries; one bad file or dropped connection doesn't fail a 50-file batch | More HTTP requests. At large scale, **presigned direct-to-S3 uploads** would take file bytes off the API entirely. |
+| **One file per request**, 4 in parallel (client) | Per-file progress bars and retries; one bad file or dropped connection doesn't fail a 50-file batch | More HTTP requests. At large scale, **presigned direct-to-S3 uploads** would take file bytes off the API entirely. |
 | **Store the original first, then validate** | The job's input is durable in S3, so a worker crash or retry never loses the upload, and images can be reprocessed if thresholds change | Rejected originals use storage → an S3 lifecycle rule to expire `originals/` after N days |
 | **Duplicate scope = collection** (one user's photo set) | "Too similar" matters inside one person's set; two users can legitimately upload similar photos. It also keeps the similarity scan to tens of rows. | Needs a user/collection identity. `collectionId` stands in for `userId` until auth exists. |
 | **Advisory lock + partial unique index** for duplicates | A plain "check then insert" lets two concurrent near-duplicates both pass (check-then-act race). The lock serializes only the same collection, for milliseconds. | A global lock would serialize all users; optimistic retries would add complexity. |
