@@ -1,5 +1,5 @@
-# Local infrastructure for development:
-#   docker compose up -d postgres redis s3
+# Local infrastructure for development (run the server and client with npm on your machine):
+#   docker compose up -d                   # Postgres :5433, Redis :6380, S3 :9090
 #   docker compose down -v                 # stop and wipe all data
 
 services:
