@@ -19,7 +19,8 @@ Users upload photos of themselves. Each photo is stored, validated in a backgrou
 7. [Security](#security)
 8. [Testing](#testing)
 9. [QA checklist](#qa-checklist)
-10. [What I would do next](#what-i-would-do-next)
+10. [AI-Assisted Development](#ai-assisted-development)
+11. [What I would do next](#what-i-would-do-next)
 
 ---
 
@@ -266,6 +267,35 @@ cd server && npm run fixtures    # generates QA files (blurry, low-res, duplicat
 | Stop Redis, upload, start Redis | Upload still returns 202 within ~2 s (`PENDING`); processed once Redis is back |
 | Reload the page | Server-side results reload from Postgres |
 | "Start a new set" | Fresh collection; earlier photos no longer count as duplicates |
+
+---
+
+## AI-Assisted Development
+
+I used **Claude Code (Anthropic)** as my implementation partner. I provided the technical direction, defined the requirements and quality bar, reviewed the design decisions, and validated the implementation through testing.
+
+### My responsibilities
+- **Requirements & scope:** Defined the assignment scope and prioritised what to build versus what to defer.
+- **Architecture & design:** Evaluated implementation approaches, reviewed trade-offs and guided technical decisions.
+- **Infrastructure:** Set up AWS, the private S3 bucket, IAM permissions and Rekognition.
+- **Quality assurance:** Tested the application with real photos, S3 and AWS Rekognition, identified issues and drove fixes.
+
+### Claude Code's contribution
+Claude Code handled most of the implementation across the frontend, backend, background workers, tests and Docker setup. It also helped explore design options, draft documentation and resolve issues identified during testing.
+
+### Iteration and validation
+The implementation went through multiple rounds of testing and refinement:
+- Fixed duplicate detection and image-validation gaps discovered during QA.
+- Improved the upload experience with batch uploads, per-file progress and clear acceptance/rejection feedback.
+- Tested with realistic photos of the same person from different angles.
+- Diagnosed and fixed a Docker startup issue involving stale images and database migration mismatches.
+
+### How I validated the solution
+- Unit tests for validation rules and image processing.
+- Integration tests against a real PostgreSQL database, including concurrent duplicate uploads.
+- Manual end-to-end QA using real photos, S3 and AWS Rekognition.
+
+The final implementation reflects the requirements, engineering decisions and quality criteria I defined and validated.
 
 ---
 
