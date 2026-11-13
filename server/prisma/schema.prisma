@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Lifecycle: PENDING (stored, queued) -> PROCESSING (worker picked it up)
+///            -> ACCEPTED | REJECTED (validation outcome, terminal)
+///            -> FAILED (infrastructure error after all retries, terminal)
+enum ImageStatus {
+  PENDING
+  PROCESSING
+  ACCEPTED
+  REJECTED
+  FAILED
+}
+
+/// Machine-readable rejection reason. The UI maps these to copy; analytics can GROUP BY them.
+enum RejectionCode {
+  FILE_TOO_SMALL
+  FILE_TOO_LARGE
+  UNSUPPORTED_FORMAT
+  CORRUPT_IMAGE
+  RESOLUTION_TOO_LOW
+  BLURRY
+  DUPLICATE
+  NO_FACE
+  MULTIPLE_FACES
+  FACE_TOO_SMALL
+}
+
+model Image {
+  id                String         @id @default(uuid()) @db.Uuid
+  /// The set of photos a user uploads together (stand-in for userId until auth exists).
+  /// Duplicate detection is scoped to a collection: two different users can upload similar photos.
+  collectionId      String         @map("collection_id") @db.Uuid
+  originalFilename  String         @map("original_filename") @db.VarChar(255)
+  /// MIME type detected from the file's magic bytes, never the client-supplied header.
+  detectedMimeType  String?        @map("detected_mime_type") @db.VarChar(32)
+  sizeBytes         Int            @map("size_bytes")
+  status            ImageStatus    @default(PENDING)
+  rejectionCode     RejectionCode? @map("rejection_code")
+  rejectionReason   String?        @map("rejection_reason")
+  /// Last infrastructure error (S3/Rekognition outage). Only set for FAILED.
+  errorMessage      String?        @map("error_message")
+
+  // S3 object keys (bucket is private; URLs are presigned at read time)
+  originalKey       String?        @map("original_key")
+  processedKey      String?        @map("processed_key")
+  thumbnailKey      String?        @map("thumbnail_key")
+  processedMimeType String?        @map("processed_mime_type") @db.VarChar(32)
+
+  // Validation metrics, stored so thresholds can be tuned against real data later
+  width             Int?
+  height            Int?
+  blurScore         Float?         @map("blur_score")
+  faceCount         Int?           @map("face_count")
+  faceAreaRatio     Float?         @map("face_area_ratio")
+  /// SHA-256 of the decoded pixels -> exact duplicate detection
+  contentHash       String?        @map("content_hash") @db.Char(64)
+  /// 64-bit difference hash -> near-duplicate detection via Hamming distance
+  perceptualHash    BigInt?        @map("perceptual_hash")
+
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  processedAt       DateTime?      @map("processed_at")
+
+  // Keyset pagination: WHERE collection_id = ? [AND status = ?] ORDER BY created_at DESC, id DESC
+  @@index([collectionId, status, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([collectionId, createdAt(sort: Desc), id(sort: Desc)])
+  // Reconciler: find PENDING rows whose job may have been lost
+  @@index([status, createdAt])
+  // NOTE: partial unique index (collection_id, content_hash) WHERE status = 'ACCEPTED' is added
+  // in the migration SQL (Prisma can't express partial indexes). It makes "two identical
+  // accepted images in one collection" impossible at the database level.
+  @@map("images")
+}
