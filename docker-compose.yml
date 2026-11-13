@@ -1,0 +1,51 @@
+# Local infrastructure for development:
+#   docker compose up -d postgres redis s3
+#   docker compose down -v                 # stop and wipe all data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: images
+    ports:
+      - "5433:5432" # 5433 on the host to avoid clashing with a local Postgres
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d images"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"] # persist queued jobs across restarts
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3-compatible API for local dev (the app talks to it with the normal AWS SDK).
+  # In production, drop S3_ENDPOINT and point at a real, private S3 bucket.
+  s3:
+    image: adobe/s3mock:3.12.0
+    environment:
+      initialBuckets: images
+      retainFilesOnExit: "true"
+      root: /data
+    ports:
+      - "9090:9090"
+    volumes:
+      - s3_data:/data
+
+volumes:
+  pg_data:
+  redis_data:
+  s3_data:
