@@ -4,6 +4,8 @@ Users upload photos of themselves. Each photo is stored, validated in a backgrou
 
 **Stack:** Next.js 16 (React 19) · NestJS 11 (Express) · PostgreSQL 16 + Prisma · BullMQ + Redis · S3 (AWS SDK v3) · sharp · AWS Rekognition
 
+**Demo video:** [watch on Google Drive](https://drive.google.com/file/d/1khM1Yhx7AurI5M966Sw4v1M5QbWobF1q/view?usp=sharing)
+
 ---
 
 ## Contents
@@ -43,26 +45,11 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ```
 
-### 2. Database migration (first run only)
+### 2. Database migrations
 
-The repo ships the Prisma schema but no migration files, so create the first migration:
+Migrations are committed in `server/prisma/migrations` and applied automatically: by the one-shot `migrate` service in Docker, or by `npm run db:migrate` locally. Don't regenerate the init migration. A second `*_init` with a different timestamp makes `migrate deploy` try to recreate existing tables on a database that already ran the first one.
 
-```bash
-docker compose up -d postgres redis
-cd server && npm install
-npx prisma migrate dev --name init --create-only
-```
-
-Prisma can't express partial indexes, so append this to the generated `prisma/migrations/<timestamp>_init/migration.sql` before applying it:
-
-```sql
--- At most one ACCEPTED image per exact file content within a collection, enforced by the DB.
-CREATE UNIQUE INDEX "images_collection_content_hash_accepted_key"
-  ON "images" ("collection_id", "content_hash")
-  WHERE "status" = 'ACCEPTED';
-```
-
-Then apply it with `npx prisma migrate dev`, and commit the `prisma/migrations` folder.
+Prisma can't express partial indexes, so the partial unique index (`images_collection_content_hash_accepted_key`) is hand-written at the end of the init migration's SQL. Any future migration that touches it has to be edited by hand too.
 
 ### 3a. Everything in Docker
 

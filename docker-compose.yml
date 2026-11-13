@@ -62,6 +62,7 @@ services:
     build:
       context: ./server
       target: build # has the Prisma CLI (dev dependency)
+    pull_policy: build # always rebuild on `up`: a stale image can carry migrations the DB doesn't know
     command: ["npx", "prisma", "migrate", "deploy"]
     environment:
       DATABASE_URL: postgresql://app:app@postgres:5432/images?schema=public
@@ -71,6 +72,7 @@ services:
 
   api:
     build: ./server
+    pull_policy: build
     environment:
       <<: *server-env
       PROCESS_ROLE: api
@@ -90,6 +92,7 @@ services:
 
   worker:
     build: ./server
+    pull_policy: build
     environment:
       <<: *server-env
       PROCESS_ROLE: worker
@@ -107,6 +110,7 @@ services:
       context: ./client
       args:
         NEXT_PUBLIC_API_URL: http://localhost:3001
+    pull_policy: build
     restart: unless-stopped
     ports:
       - "3000:3000"
