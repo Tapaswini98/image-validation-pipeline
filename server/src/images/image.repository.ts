@@ -4,6 +4,9 @@ import { PrismaService } from '../prisma/prisma.service';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
+const WITH_PIPELINE = { processingJob: true, variants: true } as const;
+export type ImageWithPipeline = Prisma.ImageGetPayload<{ include: typeof WITH_PIPELINE }>;
+
 export interface ProcessingMetrics {
   width?: number;
   height?: number;
@@ -44,13 +47,14 @@ export class ImageRepository {
     return this.prisma.image.create({ data });
   }
 
-  findById(id: string): Promise<Image | null> {
-    return this.prisma.image.findUnique({ where: { id } });
+  findById(id: string): Promise<ImageWithPipeline | null> {
+    return this.prisma.image.findUnique({ where: { id }, include: WITH_PIPELINE });
   }
 
-  findByIds(collectionId: string, ids: string[]): Promise<Image[]> {
+  findByIds(collectionId: string, ids: string[]): Promise<ImageWithPipeline[]> {
     return this.prisma.image.findMany({
       where: { collectionId, id: { in: ids } },
+      include: WITH_PIPELINE,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   }
@@ -60,8 +64,9 @@ export class ImageRepository {
    * N rows, so page 1000 is slow; a (created_at, id) cursor is an index seek at any depth
    * and doesn't skip/duplicate rows when new uploads arrive between page loads.
    */
-  findPage({ collectionId, status, limit, cursor }: PageQuery): Promise<Image[]> {
+  findPage({ collectionId, status, limit, cursor }: PageQuery): Promise<ImageWithPipeline[]> {
     return this.prisma.image.findMany({
+      include: WITH_PIPELINE,
       where: {
         collectionId,
         ...(status && { status }),

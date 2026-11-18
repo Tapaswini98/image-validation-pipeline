@@ -8,8 +8,11 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
-  /** api = HTTP only, worker = queue consumer only, all = both in one process (local dev). */
-  PROCESS_ROLE: z.enum(['api', 'worker', 'all']).default('all'),
+  /**
+   * api = HTTP only; worker = validation consumer; conversion / compression / variants = one
+   * media-pipeline stage each (deployed and scaled independently); all = everything (local dev).
+   */
+  PROCESS_ROLE: z.enum(['api', 'worker', 'conversion', 'compression', 'variants', 'all']).default('all'),
 
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().default('redis://localhost:6380'),
@@ -22,6 +25,8 @@ const EnvSchema = z.object({
 
   // Face detection: AWS Rekognition (same credentials as S3). Defaults to S3_REGION.
   REKOGNITION_REGION: z.string().min(1).optional(),
+  /** none = local/demo mode without AWS: the face check is skipped (every image counts as one clear face). */
+  FACE_DETECTOR: z.enum(['rekognition', 'none']).default('rekognition'),
 
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
@@ -44,6 +49,12 @@ const EnvSchema = z.object({
   MIN_FACE_CONFIDENCE: z.coerce.number().min(0).max(100).default(90),
   MIN_FACE_AREA_RATIO: z.coerce.number().min(0).max(1).default(0.04),
   MIN_FACE_SIZE_PX: z.coerce.number().int().positive().default(100),
+
+  // Media pipeline
+  COMPRESSION_QUALITY: z.coerce.number().int().min(30).max(95).default(80),
+  THUMBNAIL_MAX_PX: z.coerce.number().int().positive().default(256),
+  WEB_MAX_PX: z.coerce.number().int().positive().default(1280),
+  UPLOAD_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(120),
 });
 
 const ResolvedEnvSchema = EnvSchema.transform((e) => ({

@@ -31,7 +31,8 @@ export class ImagesController {
    */
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
+  // Per IP. Raised via UPLOAD_RATE_LIMIT_PER_MIN for load tests (read at import, after load-env).
+  @Throttle({ default: { limit: Number(process.env.UPLOAD_RATE_LIMIT_PER_MIN ?? 120), ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file'))
   upload(
     @UploadedFile() file: Express.Multer.File | undefined,

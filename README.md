@@ -1,6 +1,8 @@
-# Photo Upload & Validation Pipeline
+# Photo Upload, Validation & Media Processing Pipeline
 
-Users upload photos of themselves. Each photo is stored, validated in a background worker, and sorted into **Accepted** or **Rejected** with a specific, human-readable reason.
+Users upload photos of themselves. Each photo is stored, validated in a background worker, and sorted into **Accepted** or **Rejected** with a specific, human-readable reason (Part 1). Accepted photos then flow automatically through a **media pipeline** of three independently scalable services: conversion, compression and variant generation (Part 2).
+
+**Part 2 starts here:** [Media processing pipeline](#part-2-media-processing-pipeline)
 
 **Stack:** Next.js 16 (React 19) · NestJS 11 (Express) · PostgreSQL 16 + Prisma · BullMQ + Redis · S3 (AWS SDK v3) · sharp · AWS Rekognition
 
@@ -11,22 +13,25 @@ Users upload photos of themselves. Each photo is stored, validated in a backgrou
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [Architecture](#architecture)
-3. [Validation pipeline](#validation-pipeline)
-4. [Key decisions and tradeoffs](#key-decisions-and-tradeoffs)
-5. [Data model](#data-model)
-6. [API](#api)
-7. [Security](#security)
-8. [Testing](#testing)
-9. [QA checklist](#qa-checklist)
-10. [AI-Assisted Development](#ai-assisted-development)
-11. [What I would do next](#what-i-would-do-next)
+2. [**Part 2: Media processing pipeline**](#part-2-media-processing-pipeline)
+3. [Architecture](#architecture)
+4. [Validation pipeline](#validation-pipeline)
+5. [Key decisions and tradeoffs](#key-decisions-and-tradeoffs)
+6. [Data model](#data-model)
+7. [API](#api)
+8. [Security](#security)
+9. [Testing](#testing)
+10. [QA checklist](#qa-checklist)
+11. [AI-Assisted Development](#ai-assisted-development)
+12. [What I would do next](#what-i-would-do-next)
 
 ---
 
 ## Quick start
 
-Requires Node 20.12+, Docker, and an AWS account. Storage is a **private AWS S3 bucket** and face detection is **AWS Rekognition**. There is no local S3 emulator or fake face detector.
+Requires Node 20.12+, Docker, and an AWS account. Storage is a **private AWS S3 bucket** and face detection is **AWS Rekognition**.
+
+`FACE_DETECTOR=none` (root `.env`) skips the face check and treats every image as one clear face. It exists for load tests with generated images; Rekognition is the default.
 
 ### 1. AWS
 
@@ -82,6 +87,131 @@ In production the API and worker run as separate processes from the same build:
 npm run start:api      # PROCESS_ROLE=api: HTTP only
 npm run start:worker   # PROCESS_ROLE=worker: queue consumer only, scale horizontally
 ```
+
+---
+
+## Part 2: Media processing pipeline
+
+### What the user gets
+
+- An image that passes validation enters the pipeline automatically (no extra call).
+- `GET /images/:id` shows where it is: `pipeline.status` = `QUEUED → CONVERTING → COMPRESSING → GENERATING_VARIANTS → COMPLETED`, or `FAILED` with `failedStage` and `error`.
+- When complete, `variants` lists `THUMBNAIL` (≤256 px), `WEB` (≤1280 px) and `FULL` (full resolution, compressed), each with a URL, dimensions, size and MIME type. `pipeline.compression` has input/output bytes and the ratio.
+- `POST /images/:id/reprocess` re-runs the pipeline (after a failure, or to regenerate variants).
+
+### Architecture
+
+```mermaid
+flowchart LR
+  API[API<br/>POST /images] --> VQ[(validation queue)] --> V[worker<br/>validation · Part 1]
+  V -- "ACCEPTED → processing_jobs row + message" --> CQ[(conversion queue)]
+  CQ --> C[conversion ×N] -- "pipeline/{id}/converted.jpg" --> MQ[(compression queue)]
+  MQ --> M[compression ×N] -- "pipeline/{id}/compressed.jpg" --> XQ[(variants queue)]
+  XQ --> X[variants ×N] -- "variants/{id}/thumbnail|web|full.jpg" --> S3[(S3)]
+  C & M & X <--> S3
+  C & M & X -- "conditional status updates" --> PG[(Postgres)]
+```
+
+| Service | `PROCESS_ROLE` | Reads | Does | Writes |
+|---|---|---|---|---|
+| **Conversion** | `conversion` | original upload | HEIC → JPEG (libheif/wasm), PNG/JPEG → JPEG; EXIF orientation applied, metadata stripped, alpha flattened, sRGB; q95 master | `pipeline/{id}/converted.jpg`, width/height/bytes |
+| **Compression** | `compression` | converted master | mozjpeg q80 (progressive, trellis) | `pipeline/{id}/compressed.jpg`, output bytes, **compression ratio** |
+| **Variants** | `variants` | master + compressed | thumbnail and web resized from the q95 master (avoids double lossy encoding); full = compressed output | `variants/{id}/{thumbnail,web,full}.jpg` + `image_variants` rows with URLs |
+
+**Deployment:** one Docker image, one service per stage in `docker-compose.yml`; `PROCESS_ROLE` decides which consumer a container runs. In production each stage would be its own ECS service / K8s Deployment, autoscaled on its queue depth (`GET /pipeline/stats` exposes it).
+
+### Why it scales
+
+- **Stateless services.** No local disk, no in-memory state: input from S3, output to S3, state in Postgres, hand-off through Redis. Any replica can take any job, and a replica can die at any time (BullMQ re-delivers a stalled job).
+- **One queue per stage.** Each stage's backlog is visible on its own and each scales on its own: compression and resizing are CPU-bound, so they get more replicas than conversion when the mix is mostly JPEG. `docker compose up -d --scale compression=3 --scale variants=3`.
+- **Capacity = replicas × `WORKER_CONCURRENCY`** per stage. sharp/libvips runs off the Node event loop, so 2–4 concurrent jobs per process keeps a core busy.
+- **Back-pressure is free:** under load, messages wait in Redis (durable, AOF on) instead of overloading workers; the API keeps answering in ~50 ms because it never does image work.
+- **Bottlenecks I'd expect next:** S3 request rate per prefix is far away (3,500 PUT/s); Postgres sees ~4 small indexed writes per image; Rekognition (Part 1 validation) has the lowest account limit and is the first thing to throttle under a big burst (it's retried with backoff).
+
+### Idempotency: reprocessing never corrupts state or duplicates variants
+
+| Mechanism | What it prevents |
+|---|---|
+| Every state change is `UPDATE … WHERE image_id = ? AND run = ? AND status IN (expected)` | A duplicate or late message finds the row in an unexpected state, updates 0 rows and is **skipped**. No locks, no read-then-write race |
+| `run` counter on the job, carried in every message | Reprocess increments `run`; any message still in flight from the previous run is ignored |
+| Deterministic S3 keys (`variants/{id}/web.jpg`) | Re-running a stage **overwrites** the same objects; nothing new is created |
+| `image_variants` primary key = `(image_id, kind)` + upsert | A duplicate variant is impossible at the database level |
+| Variants + `COMPLETED` written in one transaction | A job is never `COMPLETED` with missing variants |
+| BullMQ `jobId = {imageId}-r{run}` | The same stage isn't even enqueued twice per run (an optimisation; correctness relies on the DB guards above) |
+| Reprocess is an atomic `COMPLETED/FAILED → QUEUED, run + 1` | Two concurrent reprocess calls: one wins, the other gets 409; reprocess while running is 409 |
+
+Covered by `test/pipeline-idempotency.int-spec.ts` against real Postgres.
+
+### Failure handling
+
+- **Unprocessable input** (corrupt file, HEIC decode failure, missing original): the stage writes `FAILED`, `failed_stage` and the reason, and the job **ends cleanly** without retries.
+- **Transient errors** (S3/DB/Redis): thrown, retried 3× with exponential backoff; after the last attempt the job is `FAILED` with the stage and reason. Nothing disappears silently.
+- **Crash between "DB updated" and "next message enqueued":** a reconciler (in the conversion service) re-enqueues jobs that haven't moved in 2 minutes and starts the pipeline for accepted images without a job. Both are no-ops if the work already happened.
+
+### API additions
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/images/:id` | Now includes `pipeline` (status, run, failedStage, error, compression, per-stage timings) and `variants[]` |
+| `POST` | `/images/:id/reprocess` | Re-run the pipeline → 202 `{ status: "QUEUED", run }`; 409 while a run is in flight |
+| `GET` | `/pipeline/stats` | Queue depth per stage + job count per status (load test, autoscaling signal) |
+
+URLs: `image_variants.url` stores the canonical S3 object URL; because the bucket is private, the API returns a **presigned** URL (15 min). Behind CloudFront the stored URL would be the CDN URL and no presigning would be needed.
+
+### Load test
+
+```bash
+# terminal 1: whole stack, with the upload rate limit raised
+UPLOAD_RATE_LIMIT_PER_MIN=5000 docker compose up -d --build --scale conversion=2 --scale compression=2 --scale variants=2
+
+# terminal 2: 200 uploads, 20 in flight, cycling through a folder of face photos
+cd server && npm run load-test -- --dir ~/photos --count 200 --concurrency 20
+```
+
+It submits through the real API (so validation + Rekognition are part of the run), prints the backlog of every queue every 2 s while it drains, then reports: upload latency, validation outcomes, pipeline completed/failed with reasons, end-to-end and per-stage latency (p50/p95), throughput, average compression ratio, and an integrity check that every completed image has exactly 3 variants and no duplicates. Re-run with more replicas of the slowest stage and compare.
+
+Photos must contain exactly one clear face to pass validation (or set `FACE_DETECTOR=none` in the root `.env` and any photos work); each upload uses its own collection so re-using a file isn't flagged as a duplicate.
+
+**Results.** Same code, two environments, workers on a laptop (Docker VM, 4 CPUs), 20 concurrent uploads of ~0.7 MB images:
+
+| Setup | Images | Pipeline only p50 / p95 | Upload → variants p50 / p95 | Throughput | Bottleneck (from queue depths) |
+|---|---|---|---|---|---|
+| S3-compatible store on the same machine; validation ×1, each stage ×2 | 200 | **0.8 s / 1.3 s** | 27.9 s / 47.9 s | **214 img/min** | validation (CPU): up to 185 waiting |
+| Same, validation ×4 | 200 | 10.2 s / 15.1 s | 41.5 s / 56.8 s | 178 img/min | compression (CPU): all replicas share 4 cores |
+| **Real AWS S3 (us-east-1)** from the laptop; validation ×1, each stage ×2 | 100 | 63.1 s / 84.9 s | 172 s / 276 s | 20 img/min | network: every stage downloads/uploads over the internet; variants (2 GETs + 3 PUTs) slowest |
+
+Every run: all images completed, 0 failed, every image exactly 3 variants, 0 duplicate rows, compression ≈ 2.7× (AWS run: 68.2 MB → 25.4 MB).
+
+What this shows: the per-stage queue depths point straight at the bottleneck, and scaling that service moves it, here to compression (mozjpeg is the most CPU-expensive step). The second run is *slower* overall because every replica shares the same 4 CPUs: 4 validation workers × 4 concurrency + 6 stage workers × 2 = 28 CPU-bound jobs on 4 cores. Horizontal scaling only buys throughput when replicas get their own CPU, which is what separate ECS services / K8s deployments autoscaled on queue depth provide. On one machine, the right move is to give the CPU to the stage with the backlog (e.g. validation ×2, compression ×3) rather than add replicas everywhere.
+
+The AWS run shows the other kind of bottleneck: with the workers far from the bucket, each stage spends most of its time on S3 transfers, so the pipeline is **network-bound**, not CPU-bound. The fix is placement, not code: run the stage services in the bucket's region (ECS/EKS, S3 transfers in milliseconds over the AWS network), and because I/O-bound stages mostly wait, raise `WORKER_CONCURRENCY` for them rather than adding replicas.
+
+### Demo script: failure and reprocess
+
+```bash
+# 1. a file that passes the magic-byte check but can't be decoded -> rejected by validation (CORRUPT_IMAGE)
+# 2. pipeline failure: break the source after acceptance, watch it fail, fix it, reprocess
+docker compose exec postgres psql -U app -d images -c \
+  "UPDATE images SET original_key = 'originals/does-not-exist' WHERE id = '<id>'"
+curl -X POST localhost:3001/images/<id>/reprocess          # -> FAILED, failedStage CONVERSION, "Original upload is missing from storage"
+docker compose exec postgres psql -U app -d images -c \
+  "UPDATE images SET original_key = 'originals/<id>' WHERE id = '<id>'"
+curl -X POST localhost:3001/images/<id>/reprocess          # -> run 2 COMPLETED, still exactly 3 variants
+```
+
+### Tradeoffs and honest reflection
+
+| Decision | Why | Cost / what I'd change |
+|---|---|---|
+| Three queues chained by the workers (not a BullMQ Flow) | Each stage is its own deployable with its own backlog; hand-off is one explicit, guarded step | The chain lives in code, not a declarative DAG. At more stages I'd use Flows or Step Functions |
+| Intermediates in S3 (`pipeline/…`) | Stages stay stateless and can run on different machines | Extra S3 round trips and storage; a lifecycle rule should expire `pipeline/` after a few days |
+| Conversion re-decodes the original although validation already did | Services are independent and conversion is the single place that owns normalisation | ~1 extra decode per image. Could pass validation's normalised output instead |
+| Same image for every role | One build, one artifact, roles differ only by env | Each container carries code it doesn't run (small) |
+| Status in a 1:1 `processing_jobs` table, not on `images` | Pipeline state, run counter and timings are separate from validation | One join on reads |
+| Postgres conditional updates instead of distributed locks | Simple, correct under at-least-once delivery, testable | Every stage does one extra small DB read/update |
+| Docker Compose as the deployment | Runs anywhere for the review; `--scale` shows independent scaling | Not autoscaling. Production: ECS/K8s per stage, scaled on queue depth (KEDA / target tracking) |
+
+Not done in the time box: autoscaling on queue depth, a CDN in front of the variants, WebP/AVIF variants (would be extra rows in `image_variants`, same pattern), metrics/tracing per stage, and a dead-letter view in the UI.
 
 ---
 
@@ -234,8 +364,8 @@ Not done (no auth in scope): `collectionId` is a client-held UUID standing in fo
 ## Testing
 
 ```bash
-cd server && npm test            # 43 unit tests
-cd server && npm run test:int    # 4 integration tests against real Postgres (Postgres up and migrated first)
+cd server && npm test            # 48 unit tests
+cd server && npm run test:int    # 9 integration tests against real Postgres (separate images_test DB, created + migrated automatically)
 cd client && npm test            # 12 reducer + grouping tests
 cd server && npm run fixtures    # generates QA files (blurry, low-res, duplicate copies, corrupt, EXIF-rotated, …)
 ```

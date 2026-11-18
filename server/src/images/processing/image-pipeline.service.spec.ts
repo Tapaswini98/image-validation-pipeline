@@ -2,6 +2,7 @@ import type { Image } from '@prisma/client';
 import { loadEnv } from '../../config/env';
 import type { ImageRepository } from '../image.repository';
 import type { StorageService } from '../../storage/storage.service';
+import type { PipelineService } from '../../pipeline/pipeline.service';
 import type { DetectedFace } from '../validation/face-rules';
 import { ImagePipelineService } from './image-pipeline.service';
 import { blurred, sceneJpeg } from '../../test-utils/images';
@@ -47,13 +48,15 @@ function setup(opts: {
     deleteMany: jest.fn().mockResolvedValue(undefined),
   };
   const detector = { detect: jest.fn().mockResolvedValue(opts.faces ?? oneFace) };
+  const mediaPipeline = { start: jest.fn().mockResolvedValue(undefined) };
   const pipeline = new ImagePipelineService(
     repo as unknown as ImageRepository,
     storage as unknown as StorageService,
     detector,
     env,
+    mediaPipeline as unknown as PipelineService,
   );
-  return { pipeline, repo, storage, detector, record };
+  return { pipeline, repo, storage, detector, record, mediaPipeline };
 }
 
 describe('ImagePipelineService', () => {
@@ -63,8 +66,9 @@ describe('ImagePipelineService', () => {
   });
 
   it('accepts a sharp, large, single-face, unique photo and stores processed + thumbnail', async () => {
-    const { pipeline, repo, storage } = setup({ file: goodPhoto });
+    const { pipeline, repo, storage, mediaPipeline } = setup({ file: goodPhoto });
     await expect(pipeline.process('id')).resolves.toBe('ACCEPTED');
+    expect(mediaPipeline.start).toHaveBeenCalledWith('id');
 
     const keys = storage.put.mock.calls.map((c) => c[0]);
     expect(keys).toEqual(

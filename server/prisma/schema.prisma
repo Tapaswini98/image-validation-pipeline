@@ -68,6 +68,9 @@ model Image {
   updatedAt         DateTime       @updatedAt @map("updated_at")
   processedAt       DateTime?      @map("processed_at")
 
+  processingJob     ProcessingJob?
+  variants          ImageVariant[]
+
   // Keyset pagination: WHERE collection_id = ? [AND status = ?] ORDER BY created_at DESC, id DESC
   @@index([collectionId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([collectionId, createdAt(sort: Desc), id(sort: Desc)])
@@ -77,4 +80,85 @@ model Image {
   // in the migration SQL (Prisma can't express partial indexes). It makes "two identical
   // accepted images in one collection" impossible at the database level.
   @@map("images")
+}
+
+/// Media pipeline (Part 2), entered automatically once an image is ACCEPTED.
+/// status = the stage the job is currently in (waiting or running):
+///   QUEUED -> CONVERTING -> COMPRESSING -> GENERATING_VARIANTS -> COMPLETED
+///   any stage -> FAILED (failed_stage + error_message say where and why)
+enum PipelineStatus {
+  QUEUED
+  CONVERTING
+  COMPRESSING
+  GENERATING_VARIANTS
+  COMPLETED
+  FAILED
+}
+
+enum PipelineStage {
+  CONVERSION
+  COMPRESSION
+  VARIANTS
+}
+
+enum VariantKind {
+  THUMBNAIL
+  WEB
+  FULL
+}
+
+/// One row per image. A reprocess resets it and increments `run`; queue messages carry the run
+/// they belong to, so messages from an older run are recognised and skipped.
+model ProcessingJob {
+  imageId          String          @id @map("image_id") @db.Uuid
+  status           PipelineStatus  @default(QUEUED)
+  run              Int             @default(1)
+  failedStage      PipelineStage?  @map("failed_stage")
+  errorMessage     String?         @map("error_message")
+
+  // Intermediate artifacts (deterministic S3 keys, overwritten on reprocess)
+  convertedKey     String?         @map("converted_key")
+  convertedBytes   Int?            @map("converted_bytes")
+  compressedKey    String?         @map("compressed_key")
+  compressedBytes  Int?            @map("compressed_bytes")
+  /// converted_bytes / compressed_bytes (2.5 = output is 2.5x smaller than the compression input)
+  compressionRatio Float?          @map("compression_ratio")
+  width            Int?
+  height           Int?
+
+  // Per-stage timestamps: status page + load-test latency breakdown
+  queuedAt         DateTime        @default(now()) @map("queued_at")
+  convertedAt      DateTime?       @map("converted_at")
+  compressedAt     DateTime?       @map("compressed_at")
+  completedAt      DateTime?       @map("completed_at")
+  failedAt         DateTime?       @map("failed_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  // Reconciler (stuck jobs) and stats
+  @@index([status, updatedAt])
+  @@map("processing_jobs")
+}
+
+/// Composite primary key (image_id, kind): a duplicate variant is impossible at the DB level,
+/// and reprocessing upserts in place.
+model ImageVariant {
+  imageId   String      @map("image_id") @db.Uuid
+  kind      VariantKind
+  key       String
+  /// Canonical S3 object URL (bucket is private: the API serves a presigned URL for it).
+  /// Behind a CDN this would be the CDN URL.
+  url       String
+  mimeType  String      @map("mime_type") @db.VarChar(32)
+  width     Int
+  height    Int
+  sizeBytes Int         @map("size_bytes")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@id([imageId, kind])
+  @@map("image_variants")
 }

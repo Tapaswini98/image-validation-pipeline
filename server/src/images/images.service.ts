@@ -11,8 +11,8 @@ import {
 import type { Image, RejectionCode } from '@prisma/client';
 import { ENV, type Env } from '../config/env';
 import { StorageService } from '../storage/storage.service';
-import type { ImageDto, ImagePage, ListImagesQuery } from './dto/images.dto';
-import { ImageRepository } from './image.repository';
+import type { ImageDto, ImagePage, ListImagesQuery, PipelineDto, VariantDto } from './dto/images.dto';
+import { ImageRepository, type ImageWithPipeline } from './image.repository';
 import { ImageQueue } from './images.queue';
 import { originalKey } from './storage-keys';
 import { detectImageType } from './validation/file-signature';
@@ -128,11 +128,18 @@ export class ImagesService {
     // Delete the row first: if S3 cleanup fails we leak storage (cheap, sweepable),
     // never a row pointing at missing objects.
     await this.storage
-      .deleteMany([image.originalKey, image.processedKey, image.thumbnailKey])
+      .deleteMany([
+        image.originalKey,
+        image.processedKey,
+        image.thumbnailKey,
+        image.processingJob?.convertedKey,
+        image.processingJob?.compressedKey,
+        ...image.variants.map((v) => v.key),
+      ])
       .catch((err: Error) => this.logger.warn(`S3 cleanup failed for image=${id}: ${err.message}`));
   }
 
-  private async mustFind(id: string): Promise<Image> {
+  private async mustFind(id: string): Promise<ImageWithPipeline> {
     const image = await this.repo.findById(id);
     if (!image) throw new NotFoundException(`Image ${id} not found`);
     return image;
@@ -153,10 +160,24 @@ export class ImagesService {
     return this.toDto(image);
   }
 
-  private async toDto(i: Image): Promise<ImageDto> {
-    const [url, thumbnailUrl] = await Promise.all([
+  private async toDto(
+    i: Image & Partial<Pick<ImageWithPipeline, 'processingJob' | 'variants'>>,
+  ): Promise<ImageDto> {
+    const [url, thumbnailUrl, variants] = await Promise.all([
       i.status === 'ACCEPTED' && i.processedKey ? this.storage.presignGet(i.processedKey) : null,
       i.thumbnailKey ? this.storage.presignGet(i.thumbnailKey) : null,
+      Promise.all(
+        (i.variants ?? []).map(
+          async (v): Promise<VariantDto> => ({
+            kind: v.kind,
+            url: await this.storage.presignGet(v.key),
+            mimeType: v.mimeType,
+            width: v.width,
+            height: v.height,
+            sizeBytes: v.sizeBytes,
+          }),
+        ),
+      ),
     ]);
     return {
       id: i.id,
@@ -177,11 +198,31 @@ export class ImagesService {
       thumbnailUrl,
       createdAt: i.createdAt.toISOString(),
       processedAt: i.processedAt?.toISOString() ?? null,
+      pipeline: i.processingJob ? toPipelineDto(i.processingJob) : null,
+      variants: variants.sort((a, b) => VARIANT_ORDER.indexOf(a.kind) - VARIANT_ORDER.indexOf(b.kind)),
     };
   }
 }
 
 const ENQUEUE_TIMEOUT_MS = 2_000;
+const VARIANT_ORDER = ['THUMBNAIL', 'WEB', 'FULL'];
+
+function toPipelineDto(j: NonNullable<ImageWithPipeline['processingJob']>): PipelineDto {
+  return {
+    status: j.status,
+    run: j.run,
+    failedStage: j.failedStage,
+    error: j.errorMessage,
+    compression: { inputBytes: j.convertedBytes, outputBytes: j.compressedBytes, ratio: j.compressionRatio },
+    timings: {
+      queuedAt: j.queuedAt.toISOString(),
+      convertedAt: j.convertedAt?.toISOString() ?? null,
+      compressedAt: j.compressedAt?.toISOString() ?? null,
+      completedAt: j.completedAt?.toISOString() ?? null,
+      failedAt: j.failedAt?.toISOString() ?? null,
+    },
+  };
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;

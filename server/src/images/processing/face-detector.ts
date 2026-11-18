@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { DetectFacesCommand, RekognitionClient } from '@aws-sdk/client-rekognition';
 import { ENV, type Env } from '../../config/env';
 import type { DetectedFace } from '../validation/face-rules';
@@ -39,5 +39,21 @@ export class RekognitionFaceDetector implements FaceDetector {
         height: f.BoundingBox?.Height ?? 0,
       },
     }));
+  }
+}
+
+/**
+ * FACE_DETECTOR=none: local/demo mode for running without an AWS account. Reports one large,
+ * centred face so the rest of validation and the media pipeline run unchanged. Never for production.
+ */
+export class DisabledFaceDetector implements FaceDetector {
+  constructor() {
+    new Logger(DisabledFaceDetector.name).warn(
+      'FACE_DETECTOR=none: face detection is DISABLED (local demo mode)',
+    );
+  }
+
+  detect(): Promise<DetectedFace[]> {
+    return Promise.resolve([{ confidence: 99.9, box: { left: 0.3, top: 0.2, width: 0.4, height: 0.5 } }]);
   }
 }

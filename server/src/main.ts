@@ -7,11 +7,11 @@ import { loadEnv } from './config/env';
 async function bootstrap() {
   const env = loadEnv();
 
-  if (env.PROCESS_ROLE === 'worker') {
-    // Queue consumer only: no HTTP server.
+  if (env.PROCESS_ROLE !== 'api' && env.PROCESS_ROLE !== 'all') {
+    // Queue consumers only (validation or one pipeline stage): no HTTP server.
     const ctx = await NestFactory.createApplicationContext(AppModule);
     ctx.enableShutdownHooks(); // SIGTERM -> BullMQ finishes active jobs before exit
-    Logger.log(`Worker started (concurrency ${env.WORKER_CONCURRENCY})`, 'Bootstrap');
+    Logger.log(`Worker started: role=${env.PROCESS_ROLE} concurrency=${env.WORKER_CONCURRENCY}`, 'Bootstrap');
     return;
   }
 

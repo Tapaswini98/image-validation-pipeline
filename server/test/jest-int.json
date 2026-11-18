@@ -4,5 +4,10 @@
   "testRegex": ".int-spec.ts$",
   "transform": { "^.+\\.(t|j)s$": "ts-jest" },
   "testEnvironment": "node",
-  "setupFiles": ["<rootDir>/../src/load-env.ts", "<rootDir>/../src/test-utils/silence-logs.ts"]
+  "globalSetup": "<rootDir>/int-global-setup.ts",
+  "setupFiles": [
+    "<rootDir>/../src/load-env.ts",
+    "<rootDir>/use-test-db.ts",
+    "<rootDir>/../src/test-utils/silence-logs.ts"
+  ]
 }

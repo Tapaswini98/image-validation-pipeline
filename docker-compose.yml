@@ -13,6 +13,7 @@
 #   S3_BUCKET=<your-bucket>
 #   S3_REGION=<bucket-region>
 #   REKOGNITION_REGION=<region>            # defaults to S3_REGION
+#   FACE_DETECTOR=none                     # optional: skip the face check (load test with generated images)
 #   AWS_ACCESS_KEY_ID=...
 #   AWS_SECRET_ACCESS_KEY=...
 
@@ -24,6 +25,8 @@ x-server-env: &server-env
   REKOGNITION_REGION: ${REKOGNITION_REGION:-${S3_REGION}}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in the root .env}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in the root .env}
+  # rekognition (default) | none = skip the face check (load tests with photos that have no faces)
+  FACE_DETECTOR: ${FACE_DETECTOR:-rekognition}
   CORS_ORIGINS: http://localhost:3000
   NODE_ENV: development
 services:
@@ -76,6 +79,7 @@ services:
     environment:
       <<: *server-env
       PROCESS_ROLE: api
+      UPLOAD_RATE_LIMIT_PER_MIN: ${UPLOAD_RATE_LIMIT_PER_MIN:-120} # raise for the load test
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -104,6 +108,53 @@ services:
       redis:
         condition: service_healthy
     stop_grace_period: 30s # let in-flight jobs finish on shutdown
+
+  # ---- Media pipeline: one stateless service per stage, same image, scaled independently ----
+  #   docker compose up -d --scale conversion=2 --scale compression=2 --scale variants=3
+  conversion:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: conversion
+      WORKER_CONCURRENCY: ${CONVERSION_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  compression:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: compression
+      WORKER_CONCURRENCY: ${COMPRESSION_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  variants:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: variants
+      WORKER_CONCURRENCY: ${VARIANTS_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
 
   client:
     build:

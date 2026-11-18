@@ -51,6 +51,11 @@ export class StorageService {
     });
   }
 
+  /** Canonical (non-public) object URL, stored in the DB. Clients get presignGet() URLs for access. */
+  objectUrl(key: string): string {
+    return `https://${this.bucket}.s3.${this.env.S3_REGION}.amazonaws.com/${key}`;
+  }
+
   async ping(): Promise<void> {
     await this.s3.send(new HeadBucketCommand({ Bucket: this.bucket }));
   }
