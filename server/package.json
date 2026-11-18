@@ -21,7 +21,8 @@
     "start:api": "PROCESS_ROLE=api nest start",
     "start:worker": "PROCESS_ROLE=worker nest start",
     "db:migrate": "prisma migrate deploy",
-    "fixtures": "ts-node --transpile-only scripts/make-fixtures.ts fixtures"
+    "fixtures": "ts-node --transpile-only scripts/make-fixtures.ts fixtures",
+    "load-test": "ts-node --transpile-only scripts/load-test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.1167.0",
