@@ -10,7 +10,7 @@ import { IMAGE_QUEUE, ImageQueue } from './images.queue';
 import { ImagePipelineService } from './processing/image-pipeline.service';
 import { ImageProcessor } from './processing/image.processor';
 import { PendingReconciler } from './processing/pending-reconciler';
-import { FACE_DETECTOR, RekognitionFaceDetector } from './processing/face-detector';
+import { DisabledFaceDetector, FACE_DETECTOR, RekognitionFaceDetector } from './processing/face-detector';
 import { runsRole } from '../config/roles';
 import { PipelineModule } from '../pipeline/pipeline.module';
 
@@ -21,7 +21,12 @@ const workerProviders: Provider[] = runsWorker
       ImageProcessor,
       PendingReconciler,
       ImagePipelineService,
-      { provide: FACE_DETECTOR, useClass: RekognitionFaceDetector },
+      {
+        provide: FACE_DETECTOR,
+        inject: [ENV],
+        useFactory: (env: Env) =>
+          env.FACE_DETECTOR === 'none' ? new DisabledFaceDetector() : new RekognitionFaceDetector(env),
+      },
     ]
   : [];
 

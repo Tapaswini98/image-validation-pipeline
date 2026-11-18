@@ -25,6 +25,8 @@ const EnvSchema = z.object({
 
   // Face detection: AWS Rekognition (same credentials as S3). Defaults to S3_REGION.
   REKOGNITION_REGION: z.string().min(1).optional(),
+  /** none = local/demo mode without AWS: the face check is skipped (every image counts as one clear face). */
+  FACE_DETECTOR: z.enum(['rekognition', 'none']).default('rekognition'),
 
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
