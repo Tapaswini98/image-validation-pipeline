@@ -6,7 +6,7 @@ Users upload photos of themselves. Each photo is stored, validated in a backgrou
 
 **Stack:** Next.js 16 (React 19) · NestJS 11 (Express) · PostgreSQL 16 + Prisma · BullMQ + Redis · S3 (AWS SDK v3) · sharp · AWS Rekognition
 
-**Demo video:** [watch on Google Drive](https://drive.google.com/file/d/1khM1Yhx7AurI5M966Sw4v1M5QbWobF1q/view?usp=sharing)
+**Demo videos:** [Part 1: upload & validation](https://drive.google.com/file/d/1khM1Yhx7AurI5M966Sw4v1M5QbWobF1q/view?usp=sharing) · [Part 2: media processing pipeline](https://drive.google.com/file/d/1NKfrE6NquMB6tNFquZqJ4dYr4OR9c6sC/view?usp=sharing)
 
 ---
 
@@ -91,6 +91,8 @@ npm run start:worker   # PROCESS_ROLE=worker: queue consumer only, scale horizon
 ---
 
 ## Part 2: Media processing pipeline
+
+**Demo video:** [watch on Google Drive](https://drive.google.com/file/d/1NKfrE6NquMB6tNFquZqJ4dYr4OR9c6sC/view?usp=sharing)
 
 ### What the user gets
 
