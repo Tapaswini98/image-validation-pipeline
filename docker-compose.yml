@@ -76,6 +76,7 @@ services:
     environment:
       <<: *server-env
       PROCESS_ROLE: api
+      UPLOAD_RATE_LIMIT_PER_MIN: ${UPLOAD_RATE_LIMIT_PER_MIN:-120} # raise for the load test
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -104,6 +105,53 @@ services:
       redis:
         condition: service_healthy
     stop_grace_period: 30s # let in-flight jobs finish on shutdown
+
+  # ---- Media pipeline: one stateless service per stage, same image, scaled independently ----
+  #   docker compose up -d --scale conversion=2 --scale compression=2 --scale variants=3
+  conversion:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: conversion
+      WORKER_CONCURRENCY: ${CONVERSION_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  compression:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: compression
+      WORKER_CONCURRENCY: ${COMPRESSION_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  variants:
+    build: ./server
+    pull_policy: build
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: variants
+      WORKER_CONCURRENCY: ${VARIANTS_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
 
   client:
     build:
