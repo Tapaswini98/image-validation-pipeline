@@ -13,6 +13,7 @@ import type { SupportedMimeType } from '../validation/file-signature';
 import { CorruptImageError, decodeImage, type DecodedImage } from './image-decoder';
 import { FACE_DETECTOR, type FaceDetector } from './face-detector';
 import { processedKey, thumbnailKey } from '../storage-keys';
+import { PipelineService } from '../../pipeline/pipeline.service';
 
 export type PipelineOutcome = 'ACCEPTED' | 'REJECTED' | 'SKIPPED';
 
@@ -36,6 +37,7 @@ export class ImagePipelineService {
     private readonly storage: StorageService,
     @Inject(FACE_DETECTOR) private readonly faceDetector: FaceDetector,
     @Inject(ENV) private readonly env: Env,
+    private readonly mediaPipeline: PipelineService,
   ) {}
 
   async process(imageId: string): Promise<PipelineOutcome> {
@@ -136,6 +138,14 @@ export class ImagePipelineService {
     this.logger.log(
       `image=${imageId} ACCEPTED blur=${decoded.blurScore.toFixed(0)} face=${verdict.faceAreaRatio.toFixed(3)}`,
     );
+
+    // Hand off to the media pipeline. The accept is already committed, so a failure here must not
+    // fail (and retry) validation: the pipeline reconciler starts any accepted image without a job.
+    await this.mediaPipeline
+      .start(imageId)
+      .catch((err: Error) =>
+        this.logger.error(`image=${imageId} pipeline start failed, reconciler will retry: ${err.message}`),
+      );
     return 'ACCEPTED';
   }
 

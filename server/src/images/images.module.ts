@@ -11,9 +11,11 @@ import { ImagePipelineService } from './processing/image-pipeline.service';
 import { ImageProcessor } from './processing/image.processor';
 import { PendingReconciler } from './processing/pending-reconciler';
 import { FACE_DETECTOR, RekognitionFaceDetector } from './processing/face-detector';
+import { runsRole } from '../config/roles';
+import { PipelineModule } from '../pipeline/pipeline.module';
 
-// The queue consumer only runs in the worker role (or "all" for local dev).
-const runsWorker = (process.env.PROCESS_ROLE ?? 'all') !== 'api';
+// The validation consumer only runs in the worker role (or "all" for local dev).
+const runsWorker = runsRole('worker');
 const workerProviders: Provider[] = runsWorker
   ? [
       ImageProcessor,
@@ -26,6 +28,7 @@ const workerProviders: Provider[] = runsWorker
 @Module({
   imports: [
     BullModule.registerQueue({ name: IMAGE_QUEUE }),
+    PipelineModule,
     MulterModule.registerAsync({
       inject: [ENV],
       useFactory: (env: Env) => ({

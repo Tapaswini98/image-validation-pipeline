@@ -10,7 +10,13 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { ImageStatus, RejectionCode } from '@prisma/client';
+import {
+  ImageStatus,
+  RejectionCode,
+  type PipelineStage,
+  type PipelineStatus,
+  type VariantKind,
+} from '@prisma/client';
 
 export class UploadImageBody {
   /** Which photo set this belongs to. Stand-in for the authenticated user id. */
@@ -67,6 +73,34 @@ export interface ImageDto {
   thumbnailUrl: string | null;
   createdAt: string;
   processedAt: string | null;
+  /** Media pipeline (null until the image is accepted). */
+  pipeline: PipelineDto | null;
+  /** Generated variants with presigned URLs (empty until the pipeline completes). */
+  variants: VariantDto[];
+}
+
+export interface PipelineDto {
+  status: PipelineStatus;
+  run: number;
+  failedStage: PipelineStage | null;
+  error: string | null;
+  compression: { inputBytes: number | null; outputBytes: number | null; ratio: number | null };
+  timings: {
+    queuedAt: string;
+    convertedAt: string | null;
+    compressedAt: string | null;
+    completedAt: string | null;
+    failedAt: string | null;
+  };
+}
+
+export interface VariantDto {
+  kind: VariantKind;
+  url: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
 }
 
 export interface ImagePage {
